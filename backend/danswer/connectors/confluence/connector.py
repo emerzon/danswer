@@ -1,5 +1,6 @@
 import io
 import os
+import re
 from collections.abc import Callable
 from collections.abc import Collection
 from datetime import datetime
@@ -65,31 +66,36 @@ def _extract_confluence_keys_from_cloud_url(wiki_url: str) -> tuple[str, str, st
     return wiki_base, space, page_id
 
 
-def _extract_confluence_keys_from_datacenter_url(wiki_url: str) -> tuple[str, str, str]:
-    """Sample
-    URL w/ page https://danswer.ai/confluence/display/1234abcd/pages/5678efgh/overview
-    URL w/o page https://danswer.ai/confluence/display/1234abcd/overview
-    wiki_base is https://danswer.ai/confluence
-    space is 1234abcd
-    page_id is 5678efgh
+def _extract_confluence_keys_from_datacenter_url(wiki_url: str, confluence_client: Confluence) -> tuple[str, str, str]:
     """
-    # /display/ is always right before the space and at the end of the base print()
-    DISPLAY = "/display/"
-    PAGE = "/pages/"
-
+    Extracts wiki base, space key, and resolves page ID from a Confluence URL.
+    """
     parsed_url = urlparse(wiki_url)
-    wiki_base = (
-        parsed_url.scheme
-        + "://"
-        + parsed_url.netloc
-        + parsed_url.path.split(DISPLAY)[0]
-    )
-    space = DISPLAY.join(parsed_url.path.split(DISPLAY)[1:]).split("/")[0]
-    page_id = ""
-    if (content := parsed_url.path.split(PAGE)) and len(content) > 1:
-        page_id = content[1]
-    return wiki_base, space, page_id
-
+    wiki_base = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    
+    # Try to extract space key and page ID from URL
+    space_match = re.search(r'/display/([^/]+)', parsed_url.path)
+    page_id_match = re.search(r'pageId=(\d+)', parsed_url.query)
+    
+    space_key = space_match.group(1) if space_match else ""
+    page_id = page_id_match.group(1) if page_id_match else ""
+    
+    # Check if there's content after the space name
+    path_parts = parsed_url.path.split('/')
+    space_index = path_parts.index(space_key) if space_key in path_parts else -1
+    
+    # Only try to resolve page ID if there's content after the space name
+    if space_index != -1 and space_index < len(path_parts) - 1 and not page_id:
+        try:
+            # Extract the page title from the URL
+            title = path_parts[-1]
+            # Use the Confluence API to get the page ID
+            page = confluence_client.get_page_by_title(space=space_key, title=title)
+            page_id = page['id']
+        except Exception as e:
+            print(f"Error retrieving page ID: {e}")
+    
+    return wiki_base, space_key, page_id
 
 def extract_confluence_keys_from_url(wiki_url: str) -> tuple[str, str, str, bool]:
     is_confluence_cloud = (
